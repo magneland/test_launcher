@@ -7,17 +7,49 @@ require "test_launcher/cli/request"
 module TestLauncher
   module CLI
     class MultiFrameworkQuery < Struct.new(:cli_options)
+      @@mutex = Mutex.new
+
       def command
-        command = nil
-        command_finders.each do |command_finder|
-          command = command_finder.generic_search
-          break if command
+        # do them all at the same time!
+        @count = command_finders.count
+        @finished = 0
+        @value = nil
+        @now = Time.now.to_f
+
+        command_finders.each do |finder|
+          Thread.new do
+            ex = nil
+
+            begin
+              val = finder.generic_search
+            rescue => e
+              ex = e
+            end
+
+            @@mutex.synchronize do
+              @finished += 1
+              if ex && !@exception
+                @exception = ex
+              elsif val && !@value
+                @value = val
+              end
+            end
+          end
         end
-        command
+
+        while (@finished < @count && !@value && !@exception) do
+          sleep(0.05)
+        end
+
+        if @exception
+          raise @exception
+        else
+          @value
+        end
       end
 
       def command_finders
-        cli_options.frameworks.map do |framework|
+        @command_finders ||= cli_options.frameworks.map do |framework|
           Queries::CommandFinder.new(request_for(framework))
         end
       end
